@@ -1,0 +1,223 @@
+// Steel Data Hub - Database Schema
+// Provider: PostgreSQL (Supabase)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  // Supabase: dùng connection pooling (pgbouncer) cho runtime,
+  // và direct connection cho migration.
+  directUrl = env("DIRECT_URL")
+}
+
+// ============ ENUMS ============
+
+enum Role {
+  ADMIN
+  USER
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum SteelStatus {
+  ACTIVE
+  DRAFT
+  ARCHIVED
+}
+
+enum ChangeAction {
+  CREATE
+  UPDATE
+  DELETE
+  RESTORE
+  IMPORT
+  EXPORT
+  LOGIN
+  LOGOUT
+  ROLE_CHANGE
+  USER_CREATE
+  USER_DELETE
+  PASSWORD_CHANGE
+}
+
+// ============ USERS & AUTH ============
+
+model User {
+  id                String    @id @default(cuid())
+  name              String
+  email             String    @unique
+  passwordHash      String
+  role              Role      @default(USER)
+  status            UserStatus @default(ACTIVE)
+  mustChangePassword Boolean  @default(false)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  lastLoginAt       DateTime?
+
+  sessions          Session[]
+  createdSteel      SteelMaterial[] @relation("CreatedBy")
+  updatedSteel      SteelMaterial[] @relation("UpdatedBy")
+  changeHistory     ChangeHistory[]
+  favorites         Favorite[]
+  recentlyViewed    RecentlyViewed[]
+
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  ipAddress    String?
+  userAgent    String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_sessions")
+}
+
+// ============ STANDARDS & CATEGORIES ============
+
+model Standard {
+  id          String   @id @default(cuid())
+  name        String   @unique // e.g. "ASTM", "EN", "JIS"
+  fullName    String
+  region      String?
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  steelMaterials SteelMaterial[]
+
+  @@map("standards")
+}
+
+model SteelCategory {
+  id          String   @id @default(cuid())
+  name        String   @unique // e.g. "Structural Steel", "Plate", "Beam"
+  slug        String   @unique
+  description String?
+  iconKey     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  steelMaterials SteelMaterial[]
+
+  @@map("steel_categories")
+}
+
+// ============ STEEL MATERIALS ============
+
+model SteelMaterial {
+  id             String      @id @default(cuid())
+  name           String
+  grade          String
+  code           String
+  standardId     String
+  categoryId     String
+  materialType   String      // Carbon Steel, Structural Steel, Stainless...
+  shape          String      // Plate, H-Beam, I-Beam, Channel, Angle...
+  country        String?
+  description    String?
+
+  // Mechanical properties
+  yieldStrength    Float?    // MPa
+  tensileStrength  Float?    // MPa
+  elongation       Float?    // %
+  density          Float?    // kg/m3
+  hardness         String?
+
+  // Chemical composition (% weight) — stored as JSON for flexibility
+  chemicalComposition Json?  // { C: 0.2, Mn: 1.4, Si: 0.4, ... }
+
+  // Dimensions
+  thicknessMin   Float?
+  thicknessMax   Float?
+  width          Float?
+  length         Float?
+  diameter       Float?
+  weight         Float?
+
+  imageUrl       String?
+  status         SteelStatus @default(ACTIVE)
+
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  createdById    String?
+  updatedById    String?
+
+  standard   Standard      @relation(fields: [standardId], references: [id])
+  category   SteelCategory @relation(fields: [categoryId], references: [id])
+  createdBy  User?         @relation("CreatedBy", fields: [createdById], references: [id])
+  updatedBy  User?         @relation("UpdatedBy", fields: [updatedById], references: [id])
+
+  changeHistory  ChangeHistory[]
+  favorites      Favorite[]
+  recentlyViewed RecentlyViewed[]
+
+  @@unique([grade, standardId], name: "uniq_grade_standard")
+  @@index([name])
+  @@index([code])
+  @@index([shape])
+  @@index([status])
+  @@map("steel_materials")
+}
+
+// ============ CHANGE HISTORY / AUDIT LOG ============
+
+model ChangeHistory {
+  id        String       @id @default(cuid())
+  userId    String?
+  steelId   String?
+  action    ChangeAction
+  fieldName String?
+  oldValue  String?
+  newValue  String?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime     @default(now())
+
+  user  User?          @relation(fields: [userId], references: [id])
+  steel SteelMaterial? @relation(fields: [steelId], references: [id])
+
+  @@index([createdAt])
+  @@index([userId])
+  @@index([steelId])
+  @@index([action])
+  @@map("change_history")
+}
+
+// ============ FAVORITES & RECENTLY VIEWED ============
+
+model Favorite {
+  id      String @id @default(cuid())
+  userId  String
+  steelId String
+  createdAt DateTime @default(now())
+
+  user  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  steel SteelMaterial @relation(fields: [steelId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, steelId])
+  @@map("favorites")
+}
+
+model RecentlyViewed {
+  id       String   @id @default(cuid())
+  userId   String
+  steelId  String
+  viewedAt DateTime @default(now())
+
+  user  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  steel SteelMaterial @relation(fields: [steelId], references: [id], onDelete: Cascade)
+
+  @@index([userId, viewedAt])
+  @@map("recently_viewed")
+}
